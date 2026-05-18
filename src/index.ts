@@ -1,9 +1,7 @@
 /**
  * ====================================================================
- * THE SYNAPTIC BRIDGE: AI MIDDLEWARE PROXY (STAGE 3 HARDENED)
+ * THE SYNAPTIC BRIDGE — PRODUCTION AI EDGE PROXY
  * File: src/index.ts
- * Description: Secure edge proxy with strict CORS validation, 
- * model whitelisting, and unified Google AI Studio routing.
  * ====================================================================
  */
 
@@ -12,143 +10,381 @@ export interface Env {
   ALLOWED_ORIGIN: string;
 }
 
+const ALLOWED_MODELS = [
+  "gemini-2.5-flash",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash-preview-tts",
+  "imagen-3.0-generate-001"
+];
+
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    
+
+  async fetch(
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext
+  ): Promise<Response> {
+
+    const origin = request.headers.get("Origin") || "";
+
     const CORS_HEADERS = {
-      "Access-Control-Allow-Origin": env.ALLOWED_ORIGIN || "https://learningbiologyforlife.org",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Origin":
+        env.ALLOWED_ORIGIN || "https://learningbiologyforlife.org",
+
+      "Access-Control-Allow-Methods":
+        "POST, OPTIONS, GET",
+
+      "Access-Control-Allow-Headers":
+        "Content-Type",
+
+      "Access-Control-Max-Age":
+        "86400"
     };
 
-    // ------------------------------------------------------------------
-    // 1. HANDLE CORS PREFLIGHT
-    // ------------------------------------------------------------------
-    if (request.method === "OPTIONS") {
-      return new Response(null, { headers: CORS_HEADERS });
-    }
+    // =========================================================
+    // HEALTH CHECK
+    // =========================================================
 
-    // ------------------------------------------------------------------
-    // 2. STRICT ORIGIN VALIDATION (Security Patch)
-    // ------------------------------------------------------------------
-    const origin = request.headers.get("Origin") || "";
-    if (env.ALLOWED_ORIGIN !== "*" && origin !== env.ALLOWED_ORIGIN) {
-      return new Response(JSON.stringify({ error: "Forbidden: Unauthorized Origin." }), {
-        status: 403,
-        headers: { "Content-Type": "application/json", ...CORS_HEADERS }
-      });
-    }
+    const url = new URL(request.url);
 
-    if (request.method !== "POST") {
-      return new Response(JSON.stringify({ error: "Method not allowed. Use POST." }), {
-        status: 405,
-        headers: { "Content-Type": "application/json", ...CORS_HEADERS }
-      });
-    }
+    if (request.method === "GET") {
 
-    if (!env.GEMINI_API_KEY) {
-      return new Response(JSON.stringify({ error: "API Key not configured." }), {
-        status: 500,
-        headers: { "Content-Type": "application/json", ...CORS_HEADERS }
-      });
-    }
-
-    try {
-      const body: any = await request.json();
-      const { model, type, prompt, systemInstruction, voice } = body;
-
-      if (!model || !prompt) {
-        throw new Error("Missing required parameters.");
-      }
-
-      // ------------------------------------------------------------------
-      // 3. MODEL WHITELIST (Security Patch)
-      // ------------------------------------------------------------------
-      const allowedModels = [
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash-preview-tts",
-        "imagen-3.0-generate-001" 
-      ];
-
-      if (!allowedModels.includes(model)) {
-        return new Response(JSON.stringify({ error: "Forbidden: Unauthorized Model." }), {
-          status: 403,
-          headers: { "Content-Type": "application/json", ...CORS_HEADERS }
+      // favicon fix
+      if (url.pathname === "/favicon.ico") {
+        return new Response(null, {
+          status: 204,
+          headers: CORS_HEADERS
         });
       }
 
-      // ------------------------------------------------------------------
-      // 4. API ROUTING & PAYLOAD CONSTRUCTION
-      // ------------------------------------------------------------------
-      const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:`;
+      return new Response(
+        JSON.stringify({
+          status: "ok",
+          service: "Synaptic AI Proxy",
+          endpoint: "/api/gemini",
+          version: "production"
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            ...CORS_HEADERS
+          }
+        }
+      );
+    }
+
+    // =========================================================
+    // CORS PREFLIGHT
+    // =========================================================
+
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        headers: CORS_HEADERS
+      });
+    }
+
+    // =========================================================
+    // STRICT ORIGIN VALIDATION
+    // =========================================================
+
+    if (
+      env.ALLOWED_ORIGIN !== "*" &&
+      origin !== env.ALLOWED_ORIGIN
+    ) {
+
+      return new Response(
+        JSON.stringify({
+          error: "Forbidden Origin"
+        }),
+        {
+          status: 403,
+          headers: {
+            "Content-Type": "application/json",
+            ...CORS_HEADERS
+          }
+        }
+      );
+    }
+
+    // =========================================================
+    // ONLY POST ALLOWED
+    // =========================================================
+
+    if (request.method !== "POST") {
+
+      return new Response(
+        JSON.stringify({
+          error: "Method not allowed"
+        }),
+        {
+          status: 405,
+          headers: {
+            "Content-Type": "application/json",
+            ...CORS_HEADERS
+          }
+        }
+      );
+    }
+
+    // =========================================================
+    // API KEY CHECK
+    // =========================================================
+
+    if (!env.GEMINI_API_KEY) {
+
+      return new Response(
+        JSON.stringify({
+          error: "Missing API key"
+        }),
+        {
+          status: 500,
+          headers: {
+            "Content-Type": "application/json",
+            ...CORS_HEADERS
+          }
+        }
+      );
+    }
+
+    try {
+
+      // =========================================================
+      // SAFE BODY PARSING
+      // =========================================================
+
+      let body: any;
+
+      try {
+        body = await request.json();
+      } catch {
+        throw new Error("Invalid JSON body");
+      }
+
+      const {
+        model,
+        type,
+        prompt,
+        systemInstruction,
+        voice
+      } = body;
+
+      // =========================================================
+      // VALIDATION
+      // =========================================================
+
+      if (!model || !prompt) {
+        throw new Error("Missing model or prompt");
+      }
+
+      if (prompt.length > 20000) {
+        throw new Error("Prompt too large");
+      }
+
+      if (!ALLOWED_MODELS.includes(model)) {
+
+        return new Response(
+          JSON.stringify({
+            error: "Unauthorized model"
+          }),
+          {
+            status: 403,
+            headers: {
+              "Content-Type": "application/json",
+              ...CORS_HEADERS
+            }
+          }
+        );
+      }
+
+      // =========================================================
+      // ROUTING
+      // =========================================================
+
       let endpoint = "generateContent";
-      let googlePayload: any = {};
+
+      const baseUrl =
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:${endpoint}`;
+
+      let payload: any = {};
+
+      // ---------------------------------------------------------
+      // IMAGE GENERATION
+      // ---------------------------------------------------------
 
       if (type === "image") {
-        endpoint = "predict"; 
-        googlePayload = {
-          instances: [{ prompt: prompt }],
-          parameters: { sampleCount: 1 }
+
+        endpoint = "predict";
+
+        payload = {
+          instances: [
+            {
+              prompt
+            }
+          ],
+
+          parameters: {
+            sampleCount: 1
+          }
         };
+
       } else {
-        googlePayload = { contents: [{ parts: [{ text: prompt }] }] };
-        
+
+        payload = {
+          contents: [
+            {
+              parts: [
+                {
+                  text: prompt
+                }
+              ]
+            }
+          ]
+        };
+
+        // system instruction
         if (systemInstruction) {
-          googlePayload.systemInstruction = { parts: [{ text: systemInstruction }] };
+
+          payload.systemInstruction = {
+            parts: [
+              {
+                text: systemInstruction
+              }
+            ]
+          };
         }
-        
+
+        // audio
         if (type === "audio") {
-          googlePayload.generationConfig = { 
-            responseModalities: ["AUDIO"], 
-            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice || "Aoede" } } } 
+
+          payload.generationConfig = {
+
+            responseModalities: ["AUDIO"],
+
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: voice || "Aoede"
+                }
+              }
+            }
           };
         }
       }
 
-      // ------------------------------------------------------------------
-      // 5. EXECUTE FETCH TO GOOGLE AI STUDIO
-      // ------------------------------------------------------------------
-      const googleResponse = await fetch(`${baseUrl}${endpoint}?key=${env.GEMINI_API_KEY}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(googlePayload)
-      });
+      // =========================================================
+      // FETCH GOOGLE API
+      // =========================================================
 
-      if (!googleResponse.ok) {
-        const errorText = await googleResponse.text();
-        throw new Error(`Google API Error (${googleResponse.status}): ${errorText}`);
+      const controller = new AbortController();
+
+      const timeout = setTimeout(() => {
+        controller.abort();
+      }, 30000);
+
+      const response = await fetch(
+        `${baseUrl}?key=${env.GEMINI_API_KEY}`,
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type": "application/json"
+          },
+
+          body: JSON.stringify(payload),
+
+          signal: controller.signal
+        }
+      );
+
+      clearTimeout(timeout);
+
+      // =========================================================
+      // GOOGLE ERROR HANDLING
+      // =========================================================
+
+      if (!response.ok) {
+
+        const errText = await response.text();
+
+        return new Response(
+          JSON.stringify({
+            error: "Google API Error",
+            status: response.status,
+            details: errText
+          }),
+          {
+            status: response.status,
+            headers: {
+              "Content-Type": "application/json",
+              ...CORS_HEADERS
+            }
+          }
+        );
       }
 
-      const data: any = await googleResponse.json();
+      const data: any = await response.json();
 
-      // ------------------------------------------------------------------
-      // 6. RESPONSE EXTRACTION
-      // ------------------------------------------------------------------
-      let extractedResult = "";
-      
-      if (type === "image") {
-        extractedResult = data.predictions?.[0]?.bytesBase64Encoded || data.candidates?.[0]?.content?.parts?.[0]?.text;
-      } else if (type === "audio") {
-        extractedResult = data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      // =========================================================
+      // EXTRACT RESPONSE
+      // =========================================================
+
+      let result = "";
+
+      if (type === "audio") {
+
+        result =
+          data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+
+      } else if (type === "image") {
+
+        result =
+          data?.predictions?.[0]?.bytesBase64Encoded ||
+          data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
       } else {
-        extractedResult = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+        result =
+          data?.candidates?.[0]?.content?.parts?.[0]?.text;
       }
 
-      if (!extractedResult) {
-        throw new Error("Failed to extract content from Google response.");
+      if (!result) {
+        throw new Error("No AI output received");
       }
 
-      return new Response(JSON.stringify({ result: extractedResult }), {
-        status: 200,
-        headers: { "Content-Type": "application/json", ...CORS_HEADERS }
-      });
+      // =========================================================
+      // SUCCESS RESPONSE
+      // =========================================================
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          result
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            ...CORS_HEADERS
+          }
+        }
+      );
 
     } catch (error: any) {
-      return new Response(JSON.stringify({ error: true, message: error.message }), {
-        status: 500,
-        headers: { "Content-Type": "application/json", ...CORS_HEADERS }
-      });
+
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: error.message || "Unknown error"
+        }),
+        {
+          status: 500,
+          headers: {
+            "Content-Type": "application/json",
+            ...CORS_HEADERS
+          }
+        }
+      );
     }
   }
 } satisfies ExportedHandler<Env>;
